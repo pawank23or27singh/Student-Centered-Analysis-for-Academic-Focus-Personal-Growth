@@ -8,6 +8,7 @@ from app.schemas.auth import LoginRequest, RefreshTokenRequest, TokenResponse
 from app.schemas.student import FacultyOverview, StudentAnalytics
 from app.services.analytics import AnalyticsService
 from app.services.analytics_export import AnalyticsExportService
+from app.services.recommendations import RecommendationService
 from app.utils.auth_middleware import create_access_token, create_refresh_token, verify_token
 from app.utils.security import verify_password
 
@@ -69,6 +70,19 @@ def list_students(limit: int = 50, db: Session = Depends(get_db)):
     return AnalyticsService(db).list_students(limit=limit)
 
 
+@router.get("/students/organized")
+def get_organized_students(db: Session = Depends(get_db)):
+    """Get students organized by department and semester hierarchy"""
+    try:
+        result = AnalyticsService(db).get_organized_students()
+        return result
+    except Exception as e:
+        print(f"Error in get_organized_students: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"error": str(e)}
+
+
 @router.get("/students/{student_id}", response_model=StudentAnalytics)
 def student_analytics(student_id: int, db: Session = Depends(get_db)):
     try:
@@ -100,3 +114,76 @@ def export_student_report(student_id: int, format: str = "json", db: Session = D
 def export_class_analytics(department: str | None = None, format: str = "json", db: Session = Depends(get_db)):
     export_service = AnalyticsExportService(db)
     return export_service.export_class_analytics(department, format)
+
+
+@router.get("/students/organized")
+def get_organized_students(db: Session = Depends(get_db)):
+    """Get students organized by department and semester hierarchy"""
+    try:
+        result = AnalyticsService(db).get_organized_students()
+        return result
+    except Exception as e:
+        print(f"Error in get_organized_students: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"error": str(e)}
+
+
+@router.get("/students/filter")
+def filter_students(
+    department: str | None = None,
+    semester: int | None = None,
+    limit: int = 50,
+    db: Session = Depends(get_db)
+):
+    """Filter students by department and/or semester"""
+    return AnalyticsService(db).filter_students(department, semester, limit)
+
+
+@router.get("/analytics/department/{department}")
+def department_analytics(department: str, db: Session = Depends(get_db)):
+    """Get analytics for specific department"""
+    return AnalyticsService(db).get_department_analytics(department)
+
+
+@router.get("/analytics/semester/{semester}")
+def semester_analytics(semester: int, db: Session = Depends(get_db)):
+    """Get analytics for specific semester"""
+    return AnalyticsService(db).get_semester_analytics(semester)
+
+
+@router.get("/recommendations/student/{student_id}")
+def student_recommendations(student_id: int, db: Session = Depends(get_db)):
+    """Get comprehensive recommendations for a specific student"""
+    try:
+        recommendation_service = RecommendationService(db)
+        return recommendation_service.get_comprehensive_recommendations(student_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/recommendations/intervention-queue")
+def intervention_queue(db: Session = Depends(get_db)):
+    """Get prioritized intervention queue for faculty"""
+    recommendation_service = RecommendationService(db)
+    return recommendation_service.get_faculty_intervention_queue()
+
+
+@router.get("/recommendations/peer-learning/{student_id}")
+def peer_learning_recommendations(student_id: int, db: Session = Depends(get_db)):
+    """Get peer learning recommendations for a specific student"""
+    try:
+        recommendation_service = RecommendationService(db)
+        return recommendation_service.get_peer_learning_recommendations(student_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/recommendations/course-performance/{student_id}")
+def course_performance(student_id: int, db: Session = Depends(get_db)):
+    """Get course-wise performance analysis for a student"""
+    try:
+        recommendation_service = RecommendationService(db)
+        return recommendation_service.get_course_performance(student_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

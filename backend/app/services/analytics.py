@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.entities import Alert, Assessment, Feedback, Student, WeeklyMetric
+from app.services.recommendations import RecommendationService
 
 
 class AnalyticsService:
@@ -128,6 +129,11 @@ class AnalyticsService:
         else:
             improvement_areas.append("Assessment performance needs improvement")
 
+        # Get enhanced recommendations
+        recommendation_service = RecommendationService(self.db)
+        enhanced_recommendations = recommendation_service.get_comprehensive_recommendations(student_id)
+        
+        # Combine traditional and enhanced recommendations
         recommendations = [
             {
                 "title": "Weekly revision plan",
@@ -142,12 +148,32 @@ class AnalyticsService:
                 "detail": "Capture one strength and one challenge after each quiz or assignment.",
             },
         ]
+        
+        # Add enhanced learning path recommendations
+        for learning_path in enhanced_recommendations["learning_paths"]:
+            recommendations.append({
+                "title": learning_path["title"],
+                "detail": learning_path["detail"],
+                "icon": learning_path.get("icon", "info"),
+                "action": learning_path.get("action", "")
+            })
+        
+        # Add engagement optimization recommendations
+        for engagement_rec in enhanced_recommendations["engagement_optimization"][:2]:
+            recommendations.append({
+                "title": engagement_rec["title"],
+                "detail": engagement_rec["detail"],
+                "icon": engagement_rec.get("icon", "info"),
+                "action": engagement_rec.get("action", "")
+            })
+        
         if predicted_risk == "High Risk" or tree_prediction == "High Risk":
             recommendations.insert(
                 0,
                 {
                     "title": "Immediate early-warning intervention",
                     "detail": "Prioritize attendance recovery and remedial assignments this week.",
+                    "icon": "alert"
                 },
             )
 
@@ -171,6 +197,7 @@ class AnalyticsService:
             "improvement_areas": improvement_areas,
             "recommendations": recommendations,
             "weekly_trend": trend,
+            "enhanced_recommendations": enhanced_recommendations,
         }
 
     def list_students(self, limit: int = 50) -> list[dict]:
@@ -271,13 +298,23 @@ class AnalyticsService:
             )
 
         alerts = self.db.scalars(select(Alert).where(Alert.resolved.is_(False))).all()
-        top_recommendations = [
-            "Launch a faculty intervention cycle for high-risk learners.",
-            "Increase attendance follow-ups for students below 60 percent.",
-            f"{len(alerts)} active alert(s) need review this week.",
-        ]
         
-        return {
+        # Get enhanced intervention queue
+        recommendation_service = RecommendationService(self.db)
+        intervention_queue = recommendation_service.get_faculty_intervention_queue()
+        
+        # Generate top recommendations based on intervention queue
+        enhanced_recommendations = []
+        urgent_students = [s for s in intervention_queue if s["priority"] == "urgent"]
+        high_priority_students = [s for s in intervention_queue if s["priority"] == "high"]
+        
+        if urgent_students:
+            enhanced_recommendations.append(f"URGENT: {len(urgent_students)} student(s) require immediate intervention")
+        if high_priority_students:
+            enhanced_recommendations.append(f"HIGH: {len(high_priority_students)} student(s) need priority attention this week")
+        enhanced_recommendations.append(f"{len(alerts)} active alert(s) need review this week.")
+        
+        result = {
             "total_students": total_students,
             "average_attendance": avg_attendance,
             "average_marks": avg_reflection,  # Using reflection as proxy for marks
@@ -288,9 +325,12 @@ class AnalyticsService:
                 "Low Risk": low_risk_count
             },
             "sentiment_distribution": dict(sentiment_distribution),
-            "top_recommendations": top_recommendations,
+            "top_recommendations": enhanced_recommendations,
             "department_trend": department_trend,
+            "intervention_queue": intervention_queue[:5] if intervention_queue else [],  # Top 5 for dashboard
         }
+        print(f"Faculty overview intervention_queue: {len(result['intervention_queue'])} items")
+        return result
 
     def at_risk_students(self) -> list[dict]:
         students = self.db.scalars(select(Student)).all()
@@ -310,3 +350,202 @@ class AnalyticsService:
                     }
                 )
         return items
+
+    def get_organized_students(self) -> dict:
+        """Organize students by department and semester hierarchy with statistics"""
+        students = self.db.scalars(select(Student)).all()
+        
+        # Simple organization - just return student list with department info
+        organized = []
+        
+        for student in students:
+            avg_marks = self._average_marks(student.id)
+            if student.attendance_rate < 55 or avg_marks < 50:
+                risk_level = "High Risk"
+            elif student.attendance_rate < 72 or avg_marks < 65:
+                risk_level = "Medium Risk"
+            else:
+                risk_level = "Low Risk"
+            
+            student_data = {
+                "id": int(student.id),
+                "name": str(student.full_name),
+                "roll_no": str(student.roll_no),
+                "department": str(student.department),
+                "semester": int(student.semester),
+                "attendance_rate": round(float(student.attendance_rate), 2),
+                "engagement_score": round(float(student.engagement_score), 2),
+                "self_reflection_score": round(float(student.self_reflection_score), 2),
+                "risk_level": str(risk_level),
+                "average_marks": round(float(avg_marks), 2)
+            }
+            organized.append(student_data)
+        
+        return {"students": organized}
+
+    def _calculate_department_stats(self, students: list) -> dict:
+        """Calculate aggregate statistics for a department"""
+        if not students:
+            return {
+                "total_students": 0,
+                "average_attendance": 0.0,
+                "average_engagement": 0.0,
+                "average_marks": 0.0,
+                "risk_distribution": {"High Risk": 0, "Medium Risk": 0, "Low Risk": 0},
+                "high_performers": 0,
+                "at_risk": 0
+            }
+        
+        total_students = len(students)
+        avg_attendance = round(float(sum(s["attendance_rate"] for s in students) / total_students), 2)
+        avg_engagement = round(float(sum(s["engagement_score"] for s in students) / total_students), 2)
+        avg_marks = round(float(sum(s.get("average_marks", 0) for s in students) / total_students), 2)
+        
+        risk_distribution = {"High Risk": 0, "Medium Risk": 0, "Low Risk": 0}
+        for student in students:
+            risk = student.get("risk_level", "Low Risk")
+            if risk in risk_distribution:
+                risk_distribution[risk] += 1
+        
+        high_performers = sum(1 for s in students if s["attendance_rate"] > 75 and s["engagement_score"] > 70)
+        at_risk = sum(1 for s in students if s["attendance_rate"] < 60 or s["engagement_score"] < 50)
+        
+        return {
+            "total_students": total_students,
+            "average_attendance": avg_attendance,
+            "average_engagement": avg_engagement,
+            "average_marks": avg_marks,
+            "risk_distribution": risk_distribution,
+            "high_performers": high_performers,
+            "at_risk": at_risk
+        }
+
+    def _calculate_semester_stats(self, students: list) -> dict:
+        """Calculate aggregate statistics for a semester"""
+        if not students:
+            return {
+                "total_students": 0,
+                "average_attendance": 0.0,
+                "average_engagement": 0.0,
+                "average_marks": 0.0,
+                "high_performers": 0,
+                "at_risk": 0
+            }
+        
+        total_students = len(students)
+        avg_attendance = round(float(sum(s["attendance_rate"] for s in students) / total_students), 2)
+        avg_engagement = round(float(sum(s["engagement_score"] for s in students) / total_students), 2)
+        
+        high_performers = sum(1 for s in students if s["attendance_rate"] > 75 and s["engagement_score"] > 70)
+        at_risk = sum(1 for s in students if s["attendance_rate"] < 60 or s["engagement_score"] < 50)
+        
+        return {
+            "total_students": total_students,
+            "average_attendance": avg_attendance,
+            "average_engagement": avg_engagement,
+            "high_performers": high_performers,
+            "at_risk": at_risk
+        }
+
+    def filter_students(self, department: str | None = None, semester: int | None = None, limit: int = 50) -> list[dict]:
+        """Filter students by department and/or semester"""
+        query = select(Student)
+        
+        if department:
+            query = query.where(Student.department == department)
+        if semester:
+            query = query.where(Student.semester == semester)
+        
+        students = self.db.scalars(query.order_by(Student.id.asc()).limit(limit)).all()
+        
+        return [
+            {
+                "id": student.id,
+                "roll_no": student.roll_no,
+                "full_name": student.full_name,
+                "semester": student.semester,
+                "department": student.department,
+                "attendance_rate": student.attendance_rate,
+                "engagement_score": student.engagement_score,
+                "self_reflection_score": student.self_reflection_score,
+            }
+            for student in students
+        ]
+
+    def get_department_analytics(self, department: str) -> dict:
+        """Get aggregated analytics for a specific department"""
+        students = self.db.scalars(
+            select(Student).where(Student.department == department)
+        ).all()
+        
+        student_data = []
+        for student in students:
+            try:
+                analytics = self.get_student_analytics(student.id)
+                student_data.append({
+                    "attendance_rate": student.attendance_rate,
+                    "engagement_score": student.engagement_score,
+                    "risk_level": analytics["predicted_risk"],
+                    "average_marks": analytics["average_marks"]
+                })
+            except Exception:
+                student_data.append({
+                    "attendance_rate": student.attendance_rate,
+                    "engagement_score": student.engagement_score,
+                    "risk_level": "Unknown",
+                    "average_marks": self._average_marks(student.id)
+                })
+        
+        return {
+            "department": department,
+            "total_students": len(students),
+            "semester_distribution": self._get_semester_distribution(students),
+            **self._calculate_department_stats(student_data)
+        }
+
+    def get_semester_analytics(self, semester: int) -> dict:
+        """Get aggregated analytics for a specific semester"""
+        students = self.db.scalars(
+            select(Student).where(Student.semester == semester)
+        ).all()
+        
+        student_data = []
+        for student in students:
+            try:
+                analytics = self.get_student_analytics(student.id)
+                student_data.append({
+                    "attendance_rate": student.attendance_rate,
+                    "engagement_score": student.engagement_score,
+                    "risk_level": analytics["predicted_risk"],
+                    "average_marks": analytics["average_marks"]
+                })
+            except Exception:
+                student_data.append({
+                    "attendance_rate": student.attendance_rate,
+                    "engagement_score": student.engagement_score,
+                    "risk_level": "Unknown",
+                    "average_marks": self._average_marks(student.id)
+                })
+        
+        return {
+            "semester": semester,
+            "total_students": len(students),
+            "department_distribution": self._get_department_distribution(students),
+            **self._calculate_department_stats(student_data)
+        }
+
+    def _get_semester_distribution(self, students: list) -> dict:
+        """Get distribution of students across semesters"""
+        semesters = {}
+        for student in students:
+            sem = f"Semester {student.semester}"
+            semesters[sem] = semesters.get(sem, 0) + 1
+        return semesters
+
+    def _get_department_distribution(self, students: list) -> dict:
+        """Get distribution of students across departments"""
+        departments = {}
+        for student in students:
+            dept = student.department
+            departments[dept] = departments.get(dept, 0) + 1
+        return departments

@@ -97,6 +97,48 @@ export function FacultyDashboard({ overview, students, onSelectStudent }) {
         <RecommendationPanel items={overview.top_recommendations} title="Faculty action queue" />
       </section>
 
+      {/* Intervention Queue Section */}
+      {overview.intervention_queue && overview.intervention_queue.length > 0 && (
+        <section className="rounded-[2rem] bg-white/90 p-6 shadow-panel">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm uppercase tracking-[0.28em] text-primary/60">Intervention Queue</p>
+              <h2 className="font-display text-2xl text-primary">Prioritized student support</h2>
+            </div>
+          </div>
+          <div className="mt-6 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {overview.intervention_queue.map((student) => (
+              <div
+                key={student.student_id}
+                onClick={() => onSelectStudent(student.student_id)}
+                className={`rounded-2xl border p-4 cursor-pointer transition hover:-translate-y-1 hover:shadow-lg ${
+                  student.priority === 'urgent' ? 'border-red-300 bg-red-50' :
+                  student.priority === 'high' ? 'border-amber-300 bg-amber-50' :
+                  'border-primary/10 bg-surface'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <p className="font-semibold text-primary">{student.full_name}</p>
+                  <span className={`text-xs font-bold uppercase px-2 py-1 rounded-full ${
+                    student.priority === 'urgent' ? 'bg-red-200 text-red-800' :
+                    student.priority === 'high' ? 'bg-amber-200 text-amber-800' :
+                    'bg-emerald-200 text-emerald-800'
+                  }`}>
+                    {student.priority}
+                  </span>
+                </div>
+                <p className="text-sm text-slate-600">{student.roll_no}</p>
+                <div className="mt-3 flex gap-4 text-xs">
+                  <span className="text-slate-500">Score: {student.intervention_score}</span>
+                  <span className="text-slate-500">Attendance: {student.attendance_rate}%</span>
+                  <span className="text-slate-500">Marks: {student.average_marks}%</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       <section className="grid gap-8 lg:grid-cols-2">
         <div className="rounded-[2rem] bg-white/90 p-6 shadow-panel">
           <p className="text-sm uppercase tracking-[0.28em] text-primary/60">Risk distribution</p>
